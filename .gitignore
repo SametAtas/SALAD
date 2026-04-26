@@ -211,3 +211,7 @@ results/
 data/
 pretrained_models/
 outputs/
+# local artifacts
+*.tar.xz
+log_gpu*.txt
+smart_fusion_*.csv

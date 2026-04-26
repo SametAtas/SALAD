@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 import numpy as np
 import torch
+import pandas as pd
 from torch.utils.data import DataLoader
 from torchvision import transforms
 import itertools
@@ -21,6 +22,12 @@ from torchvision.ops.focal_loss import sigmoid_focal_loss
 from logger import log
 from dice_loss import DiceLoss
 from argparser import get_argparse
+
+def spatial_attention_pool(anomaly_map, top_k_percent=0.01):
+    flat_map = anomaly_map.flatten()
+    k = max(1, int(len(flat_map) * top_k_percent))
+    top_k_pixels = np.partition(flat_map, -k)[-k:]
+    return np.mean(top_k_pixels)
 
 # constants
 seed = 42
@@ -160,8 +167,14 @@ def main():
     optimizer = torch.optim.Adam([{"params": list(student.parameters()) + list(autoencoder.parameters())},
                                   {"params": list(comp_ae.parameters()) + list(comp_unet.parameters()), "lr":1e-5}],
                                  lr=1e-4, weight_decay=1e-5)
+    """
     scheduler = torch.optim.lr_scheduler.StepLR(
         optimizer, step_size=int(0.95 * config.train_steps), gamma=0.1)
+    """
+    # === IMPROVEMENT: Replaced rigid StepLR with Cosine Annealing to prevent 
+    # === late-stage overfitting on smaller industrial datasets.
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=config.train_steps, eta_min=1e-6)
     
     weights = get_weights(train_loader)
     focal_loss = sigmoid_focal_loss
@@ -243,7 +256,7 @@ def main():
                 "Current loss: {:.4f}, comp recon loss {:.4f}, comp disc loss {:.4f}".format(loss_total.item(), loss_comp_recon.item(), loss_comp_mask.item()))
 
 
-        if iteration % 10000 == 0:
+        if iteration % 5000 == 0:
             torch.save(teacher, os.path.join(train_output_dir,
                                              'teacher_tmp.pth'))
             torch.save(student, os.path.join(train_output_dir,
@@ -255,7 +268,7 @@ def main():
             torch.save(comp_unet, os.path.join(train_output_dir,
                                                  'comp_unet_tmp.pth'))
 
-        if iteration % 10000 == 0 and iteration > 0:
+        if iteration % 5000 == 0 and iteration > 0:
             # run intermediate evaluation
             teacher.eval()
             student.eval()
@@ -333,6 +346,7 @@ def main():
         teacher_std=teacher_std, feature_vectors_covinv=feature_vectors_covinv, feature_vectors_mean=feature_vectors_mean, feature_vectors_covinv_seg=feature_vectors_covinv_seg, feature_vectors_mean_seg=feature_vectors_mean_seg, feature_vectors_covinv_seg_area=feature_vectors_covinv_seg_area, feature_vectors_mean_seg_area=feature_vectors_mean_seg_area,
         q_st_start=q_st_start, q_st_end=q_st_end, q_ae_start=q_ae_start, q_eff_start=q_eff_start, q_eff_end=q_eff_end, q_ae_end=q_ae_end, q_seg_start=q_seg_start, q_seg_end=q_seg_end, q_start_mah=q_start_mah, q_end_mah=q_end_mah, desc='Final inference')
     print('Final image auc: {:.4f}, img {:.4f}, maha {:.4f}, comp {:.4f}'.format(auc, auc_img, auc_mlp, auc_comp))
+    iteration = 70000
     results = {
         "Iteration": [iteration],
         "Category": [config.category],
@@ -348,6 +362,10 @@ def test(test_set, teacher, student, autoencoder, comp_ae, comp_unet,
          feature_vectors_covinv, feature_vectors_mean, feature_vectors_covinv_seg, feature_vectors_mean_seg, feature_vectors_covinv_seg_area, feature_vectors_mean_seg_area,
          q_st_start, q_st_end, q_ae_start, q_ae_end, q_eff_start, q_eff_end, q_seg_start, q_seg_end, q_start_mah, q_end_mah,
          desc='Running inference'):
+    
+    # === Prepare to store raw scores ===
+    raw_scores_log = []
+
     y_true = {"good":[],"logical_anomalies":[],"structural_anomalies":[]}
     y_score_no_mah = {"good":[],"logical_anomalies":[],"structural_anomalies":[]}
     y_score_mah = {"good":[],"logical_anomalies":[],"structural_anomalies":[]}
@@ -381,6 +399,7 @@ def test(test_set, teacher, student, autoencoder, comp_ae, comp_unet,
         defect_class = os.path.basename(os.path.dirname(path))
 
         y_true_image = 0 if defect_class == 'good' else 1
+        """
         y_score_image = np.max(map_combined) + mahalanobis_score + np.max(map_comp)
         y_score_img_no_mlp = np.max(map_combined)
         y_true[defect_class].append(y_true_image)
@@ -389,9 +408,43 @@ def test(test_set, teacher, student, autoencoder, comp_ae, comp_unet,
         y_score_comp[defect_class].append(np.max(map_comp))
         y_score[defect_class].append(y_score_image)
 
+        """
+        pooled_combined = spatial_attention_pool(map_combined)
+        pooled_comp = spatial_attention_pool(map_comp)
+        
+        y_score_image = pooled_combined + mahalanobis_score + pooled_comp
+        y_score_img_no_mlp = pooled_combined
+        
+        y_true[defect_class].append(y_true_image)
+        y_score_mah[defect_class].append(mahalanobis_score)
+        y_score_no_mah[defect_class].append(y_score_img_no_mlp)
+        y_score_comp[defect_class].append(pooled_comp)
+        y_score[defect_class].append(y_score_image)
+
         y_score_mah_all.append(mahalanobis_score)
         y_score_no_mah_all.append(y_score_img_no_mlp)
-    
+
+        # === Save the raw branch scores for this image ===
+        raw_scores_log.append({
+            'Appearance_Score': float(np.max(map_combined)),
+            'Composition_Score': float(np.max(map_comp)),
+            'Global_Score': float(mahalanobis_score),
+            'Ground_Truth': int(y_true_image),
+            'Defect_Class': defect_class,
+            'Image_Path': path 
+        })
+    # === Save the full bucket to a CSV file ===
+    df = pd.DataFrame(raw_scores_log)
+    ### df.to_csv('smart_fusion_dataset.csv', index=False)
+
+    # === This automatically names the file 'smart_fusion_breakfast_box.csv', etc. ===
+    category_name = path.split('/')[-4]
+    save_name = f"smart_fusion_{category_name}.csv"
+    df.to_csv(save_name, index=False)
+    print(f"\n✅ SUCCESS: Extracted data to {save_name}\n")
+
+    print(f"\n✅ SUCCESS: Extracted {len(df)} images to smart_fusion_dataset.csv\n")
+
     auc_log = roc_auc_score(y_true=y_true['good']+y_true['logical_anomalies'], y_score=y_score['good'] + y_score['logical_anomalies'])
     auc_str = roc_auc_score(y_true=y_true['good']+y_true['structural_anomalies'], y_score=y_score['good']+y_score['structural_anomalies'])
     auc = 0.5*(auc_log+auc_str)
@@ -511,14 +564,22 @@ def score_normalization(validation_loader, teacher, student, autoencoder, comp_a
                 image=image, teacher=teacher, student=student,
                 autoencoder=autoencoder, teacher_mean=teacher_mean,
                 teacher_std=teacher_std, q_st_start=q_st_start, q_st_end=q_st_end, q_ae_start=q_ae_start, q_ae_end=q_ae_end)
-            
+            """
             eff_score = torch.max(map_combined).cpu().numpy()
             
             map_comp = predict_comp_map(seg, comp_ae, comp_unet).max().cpu().numpy()
             
             eff_scores.append(eff_score)
             comp_scores.append(map_comp)
-
+            """
+            map_combined_np = map_combined[0, 0].cpu().numpy()
+            eff_score = spatial_attention_pool(map_combined_np)
+            
+            map_comp_np = predict_comp_map(seg, comp_ae, comp_unet).cpu().numpy()
+            comp_score = spatial_attention_pool(map_comp_np)
+            
+            eff_scores.append(eff_score)
+            comp_scores.append(comp_score)
 
     q_eff_start = np.mean(eff_scores)
     q_eff_end = np.std(eff_scores)

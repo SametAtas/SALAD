@@ -222,23 +222,20 @@ def copy_and_change(seg_mask, diff_seg_mask):
     recon_mask = torch.maximum(recon_mask_1, recon_mask_2) 
     return mask, recon_mask, seg_mask
     
-
 def read_mask(img, num_cls):
-    # img_tensor = torch.from_numpy(np.array(img, dtype=np.uint8)).long()
-    
-    # # Apply one-hot encoding and reshape to [num_cls, H, W]
-    # onehot = F.one_hot(img_tensor, num_classes=num_cls).permute(2, 0, 1).float()
-    
-    # return onehot
-
     img = torch.LongTensor(np.array(img, dtype=np.uint8))
+    
+    # Remove extra RGB channels if the mask was saved as a 3D image
+    if len(img.shape) == 3:
+        img = img[:, :, 0]
+        
     img = img.unsqueeze(0)
     
-    # print(img.shape, torch.unique(img))
-
+    # FIX: Treat any rogue indices >= num_cls as background (0)
+    # This prevents the out-of-bounds scatter error
+    img[img >= num_cls] = 0
     
     onehot_img = torch.zeros_like(img).repeat(num_cls, 1, 1)
-    # print(img.shape, onehot_img.shape)
     onehot_img = onehot_img.scatter(0, img.long(), 1)
     return onehot_img.float()
 
