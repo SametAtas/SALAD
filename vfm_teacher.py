@@ -35,6 +35,6 @@ class VFMTeacher(nn.Module):
         # SALAD's student (PDN Medium) outputs spatial dimensions of 64x64 for a 256x256 image.
         # To compute the pixel-wise Student-Teacher loss, the spatial dimensions must match.
         # We upsample the 18x18 VFM features to 64x64 to match the student.
-        features_upsampled = F.interpolate(features, size=(64, 64), mode='bilinear', align_corners=False)
+        features_upsampled = F.interpolate(features, size=(56, 56), mode='bilinear', align_corners=False)
         
         return features_upsampled
