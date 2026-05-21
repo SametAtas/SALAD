@@ -382,20 +382,11 @@ def test(test_set, teacher, student, autoencoder, comp_ae, comp_unet,
         if on_gpu:
             image = image.cuda()
             seg = seg.cuda()
-        # Step 2: Iterative Appearance Refinement (TransFusion idea)
-        map_combined_raw = None
-        for _ in range(2):
-            if map_combined_raw is not None:
-                focus_weight = 1.0 + 0.4 * torch.sigmoid(map_combined_raw - map_combined_raw.mean())
-                img_input = image * focus_weight
-            else:
-                img_input = image
-            
-            map_combined_raw, map_st, map_ae = predict(
-                image=img_input, teacher=teacher, student=student,
-                autoencoder=autoencoder, teacher_mean=teacher_mean,
-                teacher_std=teacher_std, q_st_start=q_st_start, q_st_end=q_st_end,
-                q_ae_start=q_ae_start, q_ae_end=q_ae_end)
+        map_combined_raw, map_st, map_ae = predict(
+            image=image, teacher=teacher, student=student,
+            autoencoder=autoencoder, teacher_mean=teacher_mean,
+            teacher_std=teacher_std, q_st_start=q_st_start, q_st_end=q_st_end,
+            q_ae_start=q_ae_start, q_ae_end=q_ae_end)
         
         map_combined_norm = (map_combined_raw - q_eff_start) / q_eff_end
         map_combined_tensor = map_combined_norm[0, 0]
@@ -404,14 +395,7 @@ def test(test_set, teacher, student, autoencoder, comp_ae, comp_unet,
         map_comp_norm = (map_comp_raw - q_seg_start) / q_seg_end
         map_comp_tensor = map_comp_norm[0, 0]
 
-        # Step 3A: CGSAM Soft Spatial Guidance (ObjectCore inspired)
-        # Soft spatial modulation using the composition branch to guide appearance
-        alpha = 0.5
-        comp_guidance = torch.sigmoid((map_comp_tensor - 0.5) * 4)
-        map_combined_guided = map_combined_tensor * (1.0 + alpha * comp_guidance)
-        
-        # Convert to numpy for pooling and final scoring
-        map_combined = map_combined_guided.cpu().numpy()
+        map_combined = map_combined_tensor.cpu().numpy()
         map_comp = map_comp_tensor.cpu().numpy()
 
 
@@ -420,26 +404,14 @@ def test(test_set, teacher, student, autoencoder, comp_ae, comp_unet,
         defect_class = os.path.basename(os.path.dirname(path))
 
         y_true_image = 0 if defect_class == 'good' else 1
-        """
+        
         y_score_image = np.max(map_combined) + mahalanobis_score + np.max(map_comp)
         y_score_img_no_mlp = np.max(map_combined)
+        
         y_true[defect_class].append(y_true_image)
         y_score_mah[defect_class].append(mahalanobis_score)
         y_score_no_mah[defect_class].append(y_score_img_no_mlp)
         y_score_comp[defect_class].append(np.max(map_comp))
-        y_score[defect_class].append(y_score_image)
-
-        """
-        pooled_combined = spatial_attention_pool(map_combined)
-        pooled_comp = spatial_attention_pool(map_comp)
-        
-        y_score_image = pooled_combined + mahalanobis_score + pooled_comp
-        y_score_img_no_mlp = pooled_combined
-        
-        y_true[defect_class].append(y_true_image)
-        y_score_mah[defect_class].append(mahalanobis_score)
-        y_score_no_mah[defect_class].append(y_score_img_no_mlp)
-        y_score_comp[defect_class].append(pooled_comp)
         y_score[defect_class].append(y_score_image)
 
         y_score_mah_all.append(mahalanobis_score)
@@ -581,34 +553,16 @@ def score_normalization(validation_loader, teacher, student, autoencoder, comp_a
                 image = image.cuda()
                 seg = seg.cuda()
             image = normalize(image)
-            map_combined = None
-            for _ in range(2):
-                if map_combined is not None:
-                    focus_weight = 1.0 + 0.4 * torch.sigmoid(map_combined - map_combined.mean())
-                    img_input = image * focus_weight
-                else:
-                    img_input = image
-                
-                map_combined, map_st, map_ae = predict(
-                    image=img_input, teacher=teacher, student=student,
-                    autoencoder=autoencoder, teacher_mean=teacher_mean,
-                    teacher_std=teacher_std, q_st_start=q_st_start, q_st_end=q_st_end, q_ae_start=q_ae_start, q_ae_end=q_ae_end)
-            """
-            eff_score = torch.max(map_combined).cpu().numpy()
+            map_combined, map_st, map_ae = predict(
+                image=image, teacher=teacher, student=student,
+                autoencoder=autoencoder, teacher_mean=teacher_mean,
+                teacher_std=teacher_std, q_st_start=q_st_start, q_st_end=q_st_end, q_ae_start=q_ae_start, q_ae_end=q_ae_end)
             
+            eff_score = torch.max(map_combined).cpu().numpy()
             map_comp = predict_comp_map(seg, comp_ae, comp_unet).max().cpu().numpy()
             
             eff_scores.append(eff_score)
             comp_scores.append(map_comp)
-            """
-            map_combined_np = map_combined[0, 0].cpu().numpy()
-            eff_score = spatial_attention_pool(map_combined_np)
-            
-            map_comp_np = predict_comp_map(seg, comp_ae, comp_unet).cpu().numpy()
-            comp_score = spatial_attention_pool(map_comp_np)
-            
-            eff_scores.append(eff_score)
-            comp_scores.append(comp_score)
 
     q_eff_start = np.mean(eff_scores)
     q_eff_end = np.std(eff_scores)
