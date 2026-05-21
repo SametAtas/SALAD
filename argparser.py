@@ -11,4 +11,5 @@ def get_argparse():
     parser.add_argument('--mvtec_loco_seg_path', default='./data/mvtec_loco_composition_maps/',)
     parser.add_argument('-t', '--train_steps', type=int, default=70000)
     parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--use_vfm', action='store_true', help='Use DINOv2 VFM as teacher instead of PDN')
     return parser.parse_args()

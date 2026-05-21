@@ -64,11 +64,11 @@ def test_all():
     validation_loader = DataLoader(validation_set, batch_size=1)
     
 
-    teacher = torch.load(f"{train_output_dir}/teacher_final.pth")
-    autoencoder = torch.load(f"{train_output_dir}/autoencoder_final.pth")
-    student = torch.load(f"{train_output_dir}/student_final.pth")
-    comp_ae = torch.load(f"{train_output_dir}/comp_autoencoder_final.pth")
-    comp_unet = torch.load(f"{train_output_dir}/comp_unet_final.pth")
+    teacher = torch.load(f"{train_output_dir}/teacher_final.pth", weights_only=False)
+    autoencoder = torch.load(f"{train_output_dir}/autoencoder_final.pth", weights_only=False)
+    student = torch.load(f"{train_output_dir}/student_final.pth", weights_only=False)
+    comp_ae = torch.load(f"{train_output_dir}/comp_autoencoder_final.pth", weights_only=False)
+    comp_unet = torch.load(f"{train_output_dir}/comp_unet_final.pth", weights_only=False)
     
 
     # teacher frozen

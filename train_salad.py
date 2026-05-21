@@ -16,6 +16,7 @@ from sklearn.covariance import LedoitWolf
 from collections import defaultdict
 from ae import AutoEncoder
 from unet import UNet
+from vfm_teacher import VFMTeacher
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.ops.focal_loss import sigmoid_focal_loss
@@ -139,9 +140,14 @@ def main():
     train_loader_infinite = InfiniteDataloader(train_loader)
     # create models
     
-    teacher = get_pdn_medium(out_channels=out_channels)
+    if config.use_vfm:
+        print("🚀 Using DINOv2 VFM as Teacher (AnomalyVFM CVPR 2026 mode)!")
+        teacher = VFMTeacher(out_channels=out_channels)
+    else:
+        teacher = get_pdn_medium(out_channels=out_channels)
+        teacher = torch.load(config.weights, weights_only=False)
+        
     student = get_pdn_medium(out_channels=2 * out_channels)
-    teacher = torch.load(config.weights)
     autoencoder = get_autoencoder(out_channels=out_channels)
     comp_ae = AutoEncoder({})
     comp_unet = UNet({})
@@ -376,19 +382,37 @@ def test(test_set, teacher, student, autoencoder, comp_ae, comp_unet,
         if on_gpu:
             image = image.cuda()
             seg = seg.cuda()
-        map_combined, map_st, map_ae = predict(
-            image=image, teacher=teacher, student=student,
-            autoencoder=autoencoder, teacher_mean=teacher_mean,
-            teacher_std=teacher_std, q_st_start=q_st_start, q_st_end=q_st_end,
-            q_ae_start=q_ae_start, q_ae_end=q_ae_end)
+        # Step 2: Iterative Appearance Refinement (TransFusion idea)
+        map_combined_raw = None
+        for _ in range(2):
+            if map_combined_raw is not None:
+                focus_weight = 1.0 + 0.4 * torch.sigmoid(map_combined_raw - map_combined_raw.mean())
+                img_input = image * focus_weight
+            else:
+                img_input = image
+            
+            map_combined_raw, map_st, map_ae = predict(
+                image=img_input, teacher=teacher, student=student,
+                autoencoder=autoencoder, teacher_mean=teacher_mean,
+                teacher_std=teacher_std, q_st_start=q_st_start, q_st_end=q_st_end,
+                q_ae_start=q_ae_start, q_ae_end=q_ae_end)
         
-        map_combined = (map_combined - q_eff_start) / q_eff_end
-        map_combined = map_combined[0, 0].cpu().numpy()
-        
+        map_combined_norm = (map_combined_raw - q_eff_start) / q_eff_end
+        map_combined_tensor = map_combined_norm[0, 0]
 
-        map_comp = predict_comp_map(seg, comp_ae, comp_unet).unsqueeze(0)
-        map_comp = (map_comp - q_seg_start) / q_seg_end
-        map_comp = map_comp[0, 0].cpu().numpy()
+        map_comp_raw = predict_comp_map(seg, comp_ae, comp_unet).unsqueeze(0)
+        map_comp_norm = (map_comp_raw - q_seg_start) / q_seg_end
+        map_comp_tensor = map_comp_norm[0, 0]
+
+        # Step 3A: CGSAM Soft Spatial Guidance (ObjectCore inspired)
+        # Soft spatial modulation using the composition branch to guide appearance
+        alpha = 0.5
+        comp_guidance = torch.sigmoid((map_comp_tensor - 0.5) * 4)
+        map_combined_guided = map_combined_tensor * (1.0 + alpha * comp_guidance)
+        
+        # Convert to numpy for pooling and final scoring
+        map_combined = map_combined_guided.cpu().numpy()
+        map_comp = map_comp_tensor.cpu().numpy()
 
 
         mahalanobis_score = predict_mahalanobis(image=image, seg=seg, teacher=student, teacher_mean=teacher_mean, feature_vectors_covinv=feature_vectors_covinv, feature_vectors_mean=feature_vectors_mean, feature_vectors_covinv_seg=feature_vectors_covinv_seg, feature_vectors_mean_seg=feature_vectors_mean_seg, feature_vectors_covinv_seg_area=feature_vectors_covinv_seg_area, feature_vectors_mean_seg_area=feature_vectors_mean_seg_area,
@@ -557,10 +581,18 @@ def score_normalization(validation_loader, teacher, student, autoencoder, comp_a
                 image = image.cuda()
                 seg = seg.cuda()
             image = normalize(image)
-            map_combined, map_st, map_ae = predict(
-                image=image, teacher=teacher, student=student,
-                autoencoder=autoencoder, teacher_mean=teacher_mean,
-                teacher_std=teacher_std, q_st_start=q_st_start, q_st_end=q_st_end, q_ae_start=q_ae_start, q_ae_end=q_ae_end)
+            map_combined = None
+            for _ in range(2):
+                if map_combined is not None:
+                    focus_weight = 1.0 + 0.4 * torch.sigmoid(map_combined - map_combined.mean())
+                    img_input = image * focus_weight
+                else:
+                    img_input = image
+                
+                map_combined, map_st, map_ae = predict(
+                    image=img_input, teacher=teacher, student=student,
+                    autoencoder=autoencoder, teacher_mean=teacher_mean,
+                    teacher_std=teacher_std, q_st_start=q_st_start, q_st_end=q_st_end, q_ae_start=q_ae_start, q_ae_end=q_ae_end)
             """
             eff_score = torch.max(map_combined).cpu().numpy()
             
