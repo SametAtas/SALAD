@@ -94,12 +94,8 @@ def train(args):
     
     model = get_model().cuda()
     optimizer = optim.AdamW(model.parameters(), lr=1e-4)
-    scheduler = optim.lr_scheduler.MultiStepLR(
-        optimizer,
-        [100],
-        # [int(args.epochs * 0.80), int(args.epochs * 0.90)],
-        gamma=0.2,
-        last_epoch=-1,
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=args.epochs, eta_min=1e-6
     )
     dataset = PseudoLabelDataset(
         {"path": path, "size": 256}
@@ -133,7 +129,7 @@ def train(args):
                 img = data["image"].cuda()
                 mask = data["mask"].cuda().type(torch.cuda.LongTensor)
                 optimizer.zero_grad()
-                predicted_mask = model(img).softmax(dim=1)
+                predicted_mask = model(img)
                 loss = loss_fn(predicted_mask, mask).mean()
                 total_loss += loss.item()
                 cnt += img.shape[0]
@@ -141,6 +137,7 @@ def train(args):
                 optimizer.step()
                 prog_bar.set_postfix_str(f"loss: {total_loss / cnt}")
                 prog_bar.update(img.shape[0])
+        scheduler.step()
 
     model.eval()
     test(

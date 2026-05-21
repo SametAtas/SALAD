@@ -167,10 +167,6 @@ def main():
     optimizer = torch.optim.Adam([{"params": list(student.parameters()) + list(autoencoder.parameters())},
                                   {"params": list(comp_ae.parameters()) + list(comp_unet.parameters()), "lr":1e-5}],
                                  lr=1e-4, weight_decay=1e-5)
-    """
-    scheduler = torch.optim.lr_scheduler.StepLR(
-        optimizer, step_size=int(0.95 * config.train_steps), gamma=0.1)
-    """
     # === IMPROVEMENT: Replaced rigid StepLR with Cosine Annealing to prevent 
     # === late-stage overfitting on smaller industrial datasets.
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -234,13 +230,14 @@ def main():
         loss_ae = torch.mean(distance_ae)
         loss_stae = torch.mean(distance_stae)
 
-        seg_recon = comp_ae(anom_seg).softmax(dim=1)
+        seg_recon_logits = comp_ae(anom_seg)
+        seg_recon = seg_recon_logits.softmax(dim=1)
         unet_input = torch.cat([anom_seg, seg_recon], dim=1)
 
         pred_mask = comp_unet(unet_input).squeeze(1)
 
 
-        loss_comp_recon = multiclass_focal_loss(seg_recon, seg) + dice_loss_f(seg_recon, seg)
+        loss_comp_recon = multiclass_focal_loss(seg_recon_logits, seg) + dice_loss_f(seg_recon_logits, seg)
         loss_comp_mask = 5*focal_loss(pred_mask, mask).mean() + F.l1_loss(nn.Sigmoid()(pred_mask), mask)
 
         loss_total = loss_st + loss_ae + loss_stae + loss_comp_recon + loss_comp_mask
