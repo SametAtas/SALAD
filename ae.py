@@ -2,6 +2,36 @@ import torch
 import torch.nn as nn
 
 
+class SelfAttentionBlock(nn.Module):
+    def __init__(self, channels, num_heads=8, d_k=None, n_groups=32):
+        super().__init__()
+        if d_k is None:
+            d_k = channels // num_heads
+        self.norm = nn.GroupNorm(n_groups, channels)
+        self.projection = nn.Linear(channels, num_heads * d_k * 3)
+        self.output = nn.Linear(num_heads * d_k, channels)
+        self.scale = d_k**-0.5
+        self.num_heads = num_heads
+        self.d_k = d_k
+
+    def forward(self, x: torch.Tensor):
+        batch_size, channels, height, width = x.shape
+        x = x.view(batch_size, channels, -1).permute(0, 2, 1)
+        qkv = self.projection(x).view(batch_size, -1, self.num_heads, 3 * self.d_k)
+        q, k, v = torch.chunk(qkv, 3, dim=-1)
+        attn = torch.einsum("bihd,bjhd->bijh", q, k) * self.scale
+        attn = attn.softmax(dim=2)
+        res = torch.einsum("bijh,bjhd->bihd", attn, v)
+        res = res.reshape(batch_size, -1, self.num_heads * self.d_k)
+        res = self.output(res)
+
+        res += x
+
+        res = res.permute(0, 2, 1).reshape(batch_size, channels, height, width)
+
+        return res
+
+
 class AutoEncoder(nn.Module):
     def __init__(self, parameters):
         super().__init__()
@@ -19,10 +49,12 @@ class AutoEncoder(nn.Module):
         }
         self.enc = Encoder(parameters["parameters"])
         self.dec = Decoder(parameters["parameters"])
+        self.bottleneck_attn = SelfAttentionBlock(channels=1024, num_heads=8)
 
 
     def forward(self, x):
         x = self.enc(x)
+        x = self.bottleneck_attn(x)
         x = self.dec(x)
         return x
 
