@@ -197,7 +197,8 @@ def main():
     
     
     train_set.train = True
-
+    best_auc = -float("inf")
+    best_iteration = -1
     tqdm_obj = tqdm(range(config.train_steps))
     for iteration, (img, seg, anom_seg, mask, _), image_penalty in zip(
             tqdm_obj, train_loader_infinite, penalty_loader_infinite):
@@ -312,6 +313,15 @@ def main():
                 "AUC Comp": [auc_comp]
             }
             log(train_output_dir,results)
+            if auc > best_auc:
+                best_auc = auc
+                best_iteration = iteration
+                print(f"New best AUC: {auc:.4f} at iteration {iteration}")
+                torch.save(teacher, os.path.join(train_output_dir, "teacher_best.pth"))
+                torch.save(student, os.path.join(train_output_dir, "student_best.pth"))
+                torch.save(autoencoder, os.path.join(train_output_dir, "autoencoder_best.pth"))
+                torch.save(comp_ae, os.path.join(train_output_dir, "comp_autoencoder_best.pth"))
+                torch.save(comp_unet, os.path.join(train_output_dir, "comp_unet_best.pth"))
             # teacher frozen
             teacher.eval()
             student.train()
