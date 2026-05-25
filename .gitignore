@@ -215,3 +215,13 @@ outputs/
 *.tar.xz
 log_gpu*.txt
 smart_fusion_*.csv
+
+# experiment artifacts
+SALAD_runs/
+evidence/
+*.pth
+*.csv
+*.json
+*.npz
+*.log
+log_*.txt
