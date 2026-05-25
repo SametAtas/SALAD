@@ -12,6 +12,29 @@ def get_argparse():
     parser.add_argument('-t', '--train_steps', type=int, default=70000)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument(
+        '--fusion_weights',
+        default='1,1,1',
+        help='Comma-separated img,mahalanobis,composition weights used for final-score fusion.'
+    )
+    parser.add_argument(
+        '--save_branch_scores',
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help='Save per-image branch scores for each evaluation checkpoint.'
+    )
+    parser.add_argument(
+        '--split',
+        choices=('test', 'validation'),
+        default='test',
+        help='Dataset split to evaluate in test_salad.py.'
+    )
+    parser.add_argument(
+        '--checkpoint',
+        choices=('final', 'best', 'tmp'),
+        default='final',
+        help='Checkpoint suffix to load in test_salad.py.'
+    )
+    parser.add_argument(
         '--composition_num_classes',
         type=int,
         default=6,

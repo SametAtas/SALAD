@@ -23,6 +23,64 @@ from logger import log
 from dice_loss import DiceLoss
 from argparser import get_argparse
 
+
+def parse_fusion_weights(value):
+    weights = tuple(float(part.strip()) for part in value.split(","))
+    if len(weights) != 3:
+        raise ValueError("--fusion_weights must contain exactly three values: img,mahalanobis,composition")
+    if any(weight < 0 for weight in weights):
+        raise ValueError("--fusion_weights must be non-negative")
+    if sum(weights) == 0:
+        raise ValueError("--fusion_weights cannot all be zero")
+    return weights
+
+
+def weighted_fusion_score(image_score, mahalanobis_score, composition_score, fusion_weights):
+    w_img, w_mah, w_comp = fusion_weights
+    return w_img * image_score + w_mah * mahalanobis_score + w_comp * composition_score
+
+
+def category_from_path(path):
+    parts = os.path.normpath(path).split(os.sep)
+    for split_name in ("test", "validation", "train"):
+        if split_name in parts:
+            split_index = parts.index(split_name)
+            if split_index > 0:
+                return parts[split_index - 1]
+    return "unknown"
+
+
+def canonical_stem(path):
+    stem = os.path.splitext(os.path.basename(path))[0]
+    for suffix in ("_refined_seg", "_gt", "_mask"):
+        if stem.endswith(suffix):
+            stem = stem[: -len(suffix)]
+    return stem
+
+
+def sample_key_from_path(path, defect_class):
+    return f"{defect_class}/{canonical_stem(path)}"
+
+
+def safe_auc(labels, scores):
+    if len(set(labels)) < 2:
+        return np.nan
+    return roc_auc_score(y_true=labels, y_score=scores)
+
+
+def loco_auc_parts(y_true, y_score):
+    auc_log = safe_auc(
+        y_true['good'] + y_true['logical_anomalies'],
+        y_score['good'] + y_score['logical_anomalies']
+    )
+    auc_str = safe_auc(
+        y_true['good'] + y_true['structural_anomalies'],
+        y_score['good'] + y_score['structural_anomalies']
+    )
+    if np.isnan(auc_log) and np.isnan(auc_str):
+        return np.nan, auc_log, auc_str
+    return np.nanmean([auc_log, auc_str]), auc_log, auc_str
+
 def spatial_attention_pool(anomaly_map, top_k_percent=0.01):
     flat_map = anomaly_map.flatten()
     k = max(1, int(len(flat_map) * top_k_percent))
@@ -63,6 +121,7 @@ def train_transform(image):
 
 def main():
     config = get_argparse()
+    fusion_weights = parse_fusion_weights(config.fusion_weights)
     
     seed = config.seed
     torch.manual_seed(seed)
@@ -301,7 +360,8 @@ def main():
                 test_set=test_set, teacher=teacher, student=student, comp_ae=comp_ae, comp_unet=comp_unet,
                 autoencoder=autoencoder, teacher_mean=teacher_mean,
                 teacher_std=teacher_std, feature_vectors_covinv=feature_vectors_covinv, feature_vectors_mean=feature_vectors_mean, feature_vectors_covinv_seg=feature_vectors_covinv_seg, feature_vectors_mean_seg=feature_vectors_mean_seg, feature_vectors_covinv_seg_area=feature_vectors_covinv_seg_area, feature_vectors_mean_seg_area=feature_vectors_mean_seg_area,
-                q_st_start=q_st_start, q_st_end=q_st_end, q_ae_start=q_ae_start, q_eff_start=q_eff_start, q_eff_end=q_eff_end, q_ae_end=q_ae_end, q_seg_start=q_seg_start, q_seg_end=q_seg_end, q_start_mah=q_start_mah, q_end_mah=q_end_mah, desc='Intermediate inference')
+                q_st_start=q_st_start, q_st_end=q_st_end, q_ae_start=q_ae_start, q_eff_start=q_eff_start, q_eff_end=q_eff_end, q_ae_end=q_ae_end, q_seg_start=q_seg_start, q_seg_end=q_seg_end, q_start_mah=q_start_mah, q_end_mah=q_end_mah, desc='Intermediate inference',
+                fusion_weights=fusion_weights, score_output_dir=train_output_dir if config.save_branch_scores else None, iteration=iteration)
             print('Intermediate image auc: {:.4f}, img {:.4f}, maha {:.4f}, comp {:.4f}'.format(auc, auc_img, auc_mlp, auc_comp))
 
             results = {
@@ -310,7 +370,10 @@ def main():
                 "AUC": [auc],
                 "AUC Img": [auc_img],
                 "AUC Maha": [auc_mlp],
-                "AUC Comp": [auc_comp]
+                "AUC Comp": [auc_comp],
+                "Fusion Weight Img": [fusion_weights[0]],
+                "Fusion Weight Maha": [fusion_weights[1]],
+                "Fusion Weight Comp": [fusion_weights[2]]
             }
             log(train_output_dir,results)
             if auc > best_auc:
@@ -361,7 +424,8 @@ def main():
         test_set=test_set, teacher=teacher, student=student, comp_ae=comp_ae, comp_unet=comp_unet,
         autoencoder=autoencoder, teacher_mean=teacher_mean,
         teacher_std=teacher_std, feature_vectors_covinv=feature_vectors_covinv, feature_vectors_mean=feature_vectors_mean, feature_vectors_covinv_seg=feature_vectors_covinv_seg, feature_vectors_mean_seg=feature_vectors_mean_seg, feature_vectors_covinv_seg_area=feature_vectors_covinv_seg_area, feature_vectors_mean_seg_area=feature_vectors_mean_seg_area,
-        q_st_start=q_st_start, q_st_end=q_st_end, q_ae_start=q_ae_start, q_eff_start=q_eff_start, q_eff_end=q_eff_end, q_ae_end=q_ae_end, q_seg_start=q_seg_start, q_seg_end=q_seg_end, q_start_mah=q_start_mah, q_end_mah=q_end_mah, desc='Final inference')
+        q_st_start=q_st_start, q_st_end=q_st_end, q_ae_start=q_ae_start, q_eff_start=q_eff_start, q_eff_end=q_eff_end, q_ae_end=q_ae_end, q_seg_start=q_seg_start, q_seg_end=q_seg_end, q_start_mah=q_start_mah, q_end_mah=q_end_mah, desc='Final inference',
+        fusion_weights=fusion_weights, score_output_dir=train_output_dir if config.save_branch_scores else None, iteration=70000)
     print('Final image auc: {:.4f}, img {:.4f}, maha {:.4f}, comp {:.4f}'.format(auc, auc_img, auc_mlp, auc_comp))
     iteration = 70000
     results = {
@@ -370,7 +434,10 @@ def main():
         "AUC": [auc],
         "AUC Img": [auc_img],
         "AUC Maha": [auc_mlp],
-        "AUC Comp": [auc_comp]
+        "AUC Comp": [auc_comp],
+        "Fusion Weight Img": [fusion_weights[0]],
+        "Fusion Weight Maha": [fusion_weights[1]],
+        "Fusion Weight Comp": [fusion_weights[2]]
     }
     log(train_output_dir,results)
 
@@ -378,7 +445,7 @@ def test(test_set, teacher, student, autoencoder, comp_ae, comp_unet,
          teacher_mean, teacher_std,
          feature_vectors_covinv, feature_vectors_mean, feature_vectors_covinv_seg, feature_vectors_mean_seg, feature_vectors_covinv_seg_area, feature_vectors_mean_seg_area,
          q_st_start, q_st_end, q_ae_start, q_ae_end, q_eff_start, q_eff_end, q_seg_start, q_seg_end, q_start_mah, q_end_mah,
-         desc='Running inference'):
+         desc='Running inference', fusion_weights=(1, 1, 1), score_output_dir=None, iteration=None):
     
     # === Prepare to store raw scores ===
     raw_scores_log = []
@@ -429,7 +496,7 @@ def test(test_set, teacher, student, autoencoder, comp_ae, comp_unet,
         pooled_combined = spatial_attention_pool(map_combined)
         pooled_comp = spatial_attention_pool(map_comp)
         
-        y_score_image = pooled_combined + mahalanobis_score + pooled_comp
+        y_score_image = weighted_fusion_score(pooled_combined, mahalanobis_score, pooled_comp, fusion_weights)
         y_score_img_no_mlp = pooled_combined
         
         y_true[defect_class].append(y_true_image)
@@ -443,37 +510,30 @@ def test(test_set, teacher, student, autoencoder, comp_ae, comp_unet,
 
         # === Save the raw branch scores for this image ===
         raw_scores_log.append({
-            'Appearance_Score': float(np.max(map_combined)),
-            'Composition_Score': float(np.max(map_comp)),
+            'Sample_Key': sample_key_from_path(path, defect_class),
+            'Appearance_Score': float(pooled_combined),
+            'Composition_Score': float(pooled_comp),
             'Global_Score': float(mahalanobis_score),
+            'Equal_Fusion_Score': float(pooled_combined + mahalanobis_score + pooled_comp),
+            'Weighted_Fusion_Score': float(y_score_image),
             'Ground_Truth': int(y_true_image),
             'Defect_Class': defect_class,
             'Image_Path': path 
         })
-    # === Save the full bucket to a CSV file ===
-    df = pd.DataFrame(raw_scores_log)
-    ### df.to_csv('smart_fusion_dataset.csv', index=False)
+    if score_output_dir is not None:
+        df = pd.DataFrame(raw_scores_log)
+        os.makedirs(score_output_dir, exist_ok=True)
+        category_name = category_from_path(path)
+        suffix = f"_{iteration}" if iteration is not None else ""
+        save_name = f"branch_scores_{category_name}{suffix}.csv"
+        save_path = os.path.join(score_output_dir, save_name)
+        df.to_csv(save_path, index=False)
+        print(f"\nSaved {len(df)} branch-score rows to {save_path}\n")
 
-    # === This automatically names the file 'smart_fusion_breakfast_box.csv', etc. ===
-    category_name = path.split('/')[-4]
-    save_name = f"smart_fusion_{category_name}.csv"
-    df.to_csv(save_name, index=False)
-    print(f"\n✅ SUCCESS: Extracted data to {save_name}\n")
-
-    print(f"\n✅ SUCCESS: Extracted {len(df)} images to smart_fusion_dataset.csv\n")
-
-    auc_log = roc_auc_score(y_true=y_true['good']+y_true['logical_anomalies'], y_score=y_score['good'] + y_score['logical_anomalies'])
-    auc_str = roc_auc_score(y_true=y_true['good']+y_true['structural_anomalies'], y_score=y_score['good']+y_score['structural_anomalies'])
-    auc = 0.5*(auc_log+auc_str)
-    auc_log_mah = roc_auc_score(y_true=y_true['good']+y_true['logical_anomalies'], y_score=y_score_mah['good'] + y_score_mah['logical_anomalies'])
-    auc_str_mah = roc_auc_score(y_true=y_true['good']+y_true['structural_anomalies'], y_score=y_score_mah['good']+y_score_mah['structural_anomalies'])
-    auc_mlp = 0.5*(auc_log_mah+auc_str_mah)
-    auc_log_no_mah = roc_auc_score(y_true=y_true['good']+y_true['logical_anomalies'], y_score=y_score_no_mah['good'] + y_score_no_mah['logical_anomalies'])
-    auc_str_no_mah = roc_auc_score(y_true=y_true['good']+y_true['structural_anomalies'], y_score=y_score_no_mah['good']+y_score_no_mah['structural_anomalies'])
-    auc_img = 0.5*(auc_log_no_mah+auc_str_no_mah)
-    auc_log_comp = roc_auc_score(y_true=y_true['good']+y_true['logical_anomalies'], y_score=y_score_comp['good'] + y_score_comp['logical_anomalies'])
-    auc_str_comp = roc_auc_score(y_true=y_true['good']+y_true['structural_anomalies'], y_score=y_score_comp['good']+y_score_comp['structural_anomalies'])
-    auc_comp = 0.5*(auc_log_comp+auc_str_comp)
+    auc, auc_log, auc_str = loco_auc_parts(y_true, y_score)
+    auc_mlp, auc_log_mah, auc_str_mah = loco_auc_parts(y_true, y_score_mah)
+    auc_img, auc_log_no_mah, auc_str_no_mah = loco_auc_parts(y_true, y_score_no_mah)
+    auc_comp, auc_log_comp, auc_str_comp = loco_auc_parts(y_true, y_score_comp)
 
     print("AUC Scores for different parts")
     print(f"All Logical: {auc_log*100}, Struct: {auc_str*100}")
