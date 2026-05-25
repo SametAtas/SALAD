@@ -19,6 +19,7 @@ def test_all():
 
     dataset_path = config.mvtec_loco_path
     seg_dataset_path = config.mvtec_loco_seg_path
+    composition_num_classes = config.composition_num_classes
 
 
     # create output dir
@@ -30,7 +31,8 @@ def test_all():
         transform=transforms.Lambda(train_transform))
     full_train_seg_set = ImageFolderWithoutTarget(
             os.path.join(seg_dataset_path, config.category, 'train'),
-            transform=transforms.Lambda(train_transform))
+            transform=transforms.Lambda(train_transform),
+            num_cls=composition_num_classes)
     full_train_set.seg = False
     full_train_seg_set.seg = True
 
@@ -39,7 +41,8 @@ def test_all():
         transform=default_transform)
     test_seg_set = ImageFolderWithoutTarget(
         os.path.join(seg_dataset_path, config.category, 'test'),
-        transform=default_transform)
+        transform=default_transform,
+        num_cls=composition_num_classes)
     test_set.seg = False
     test_seg_set.seg = True
     
@@ -53,7 +56,8 @@ def test_all():
         transform=transforms.Lambda(train_transform))
     validation_seg_set = ImageFolderWithoutTarget(
         os.path.join(seg_dataset_path, config.category, 'validation'),
-        transform=transforms.Lambda(train_transform))
+        transform=transforms.Lambda(train_transform),
+        num_cls=composition_num_classes)
     validation_set.seg = False
     validation_seg_set.seg = True
     validation_set = ImageFolderWithoutTargetWithSeg(validation_set, validation_seg_set)

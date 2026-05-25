@@ -38,11 +38,11 @@ def save_img(i, savepath, mask, palette):
     pi.save(f"{savepath}{i:03d}.png")
 
 
-def get_model():
+def get_model(output_channels):
     parameters = {
         "n_channels": 64,
         "image_channels": 3,
-        "output_channels": 6,
+        "output_channels": output_channels,
         "is_attn": [False, False, False, False],
         "ch_mults": [1, 2, 2, 2],
         "n_blocks": 1,
@@ -85,6 +85,7 @@ def test(testset, model, save_path, test_partition):
 def train(args):
     save_path = args.log_path + "/" + args.category + "/"
     os.makedirs(save_path, exist_ok=True)
+    output_channels = args.n_clusters + 1
     path = (
         args.data_path
         + "/"
@@ -92,7 +93,7 @@ def train(args):
         + "/train/good/"
     )
     
-    model = get_model().cuda()
+    model = get_model(output_channels).cuda()
     optimizer = optim.AdamW(model.parameters(), lr=1e-4)
     scheduler = optim.lr_scheduler.MultiStepLR(
         optimizer,

@@ -72,6 +72,7 @@ def main():
 
     dataset_path = config.mvtec_loco_path
     seg_dataset_path = config.mvtec_loco_seg_path
+    composition_num_classes = config.composition_num_classes
 
     pretrain_penalty = True
     if config.imagenet_train_path == 'none':
@@ -86,7 +87,8 @@ def main():
         transform=transforms.Lambda(train_transform))
     full_train_seg_set = ImageFolderWithoutTarget(
             os.path.join(seg_dataset_path, config.category, 'train'),
-            transform=transforms.Lambda(train_transform))
+            transform=transforms.Lambda(train_transform),
+            num_cls=composition_num_classes)
     full_train_set.seg = False
     full_train_seg_set.seg = True
 
@@ -95,7 +97,8 @@ def main():
         transform=default_transform)
     test_seg_set = ImageFolderWithoutTarget(
         os.path.join(seg_dataset_path, config.category, 'test'),
-        transform=default_transform)
+        transform=default_transform,
+        num_cls=composition_num_classes)
     test_set.seg = False
     test_seg_set.seg = True
 
@@ -107,7 +110,8 @@ def main():
         transform=transforms.Lambda(train_transform))
     validation_seg_set = ImageFolderWithoutTarget(
         os.path.join(seg_dataset_path, config.category, 'validation'),
-        transform=transforms.Lambda(train_transform))
+        transform=transforms.Lambda(train_transform),
+        num_cls=composition_num_classes)
     validation_set.seg = False
     validation_seg_set.seg = True
     validation_set = ImageFolderWithoutTargetWithSeg(validation_set, validation_seg_set)
@@ -143,8 +147,11 @@ def main():
     student = get_pdn_medium(out_channels=2 * out_channels)
     teacher = torch.load(config.weights)
     autoencoder = get_autoencoder(out_channels=out_channels)
-    comp_ae = AutoEncoder({})
-    comp_unet = UNet({})
+    comp_ae = AutoEncoder({
+        "image_channels": composition_num_classes,
+        "out_channels": composition_num_classes,
+    })
+    comp_unet = UNet({"image_channels": 2 * composition_num_classes})
 
 
     # teacher frozen

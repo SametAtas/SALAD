@@ -11,4 +11,10 @@ def get_argparse():
     parser.add_argument('--mvtec_loco_seg_path', default='./data/mvtec_loco_composition_maps/',)
     parser.add_argument('-t', '--train_steps', type=int, default=70000)
     parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument(
+        '--composition_num_classes',
+        type=int,
+        default=6,
+        help='Number of composition-map classes, including background.'
+    )
     return parser.parse_args()

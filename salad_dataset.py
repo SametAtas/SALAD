@@ -293,12 +293,16 @@ class ImageFolderWithPathWithSeg(Dataset):
         return len(self.dataset1)
 
 class ImageFolderWithoutTarget(ImageFolder):
+    def __init__(self, *args, num_cls=6, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.num_cls = num_cls
+        self.seg = False
 
     def __getitem__(self, index):
         path, target = self.samples[index]
         if self.seg:
             sample = Image.open(path)
-            sample = read_mask(sample, 6)
+            sample = read_mask(sample, self.num_cls)
         else:
             sample, target = super().__getitem__(index)
         return sample
